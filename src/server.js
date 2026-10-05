@@ -1,13 +1,13 @@
 // Plain-HTTP REST API for n8n (or any HTTP client). Put TLS in front of it if it is exposed.
 // Every route except /health needs "Authorization: Bearer <Huly token>"; the token is the caller's
-// Huly identity, so Huly itself does the authentication. Optional "X-Huly-Workspace" overrides HULY_WORKSPACE.
+// Huly identity, so Huly itself does the authentication (and decides the workspace).
 
 const http = require('node:http')
 const huly = require('./huly')
 
 const PORT = Number(process.env.PORT ?? 8080)
 if (!process.env.HULY_URL) {
-  console.error('HULY_URL is required (HULY_WORKSPACE is the default workspace, optional)')
+  console.error('HULY_URL is required')
   process.exit(1)
 }
 
@@ -53,16 +53,15 @@ http
 
     const token = bearer(req)
     if (!token) return send(res, 401, { error: 'Authorization: Bearer <Huly token> is required' })
-    const workspace = req.headers['x-huly-workspace'] || undefined
     const started = Date.now()
     try {
       const params = route[1].exec(url.pathname).slice(1)
       const body = req.method === 'GET' ? {} : await readJson(req)
-      const client = await huly.getClient(token, workspace)
+      const client = await huly.getClient(token)
       send(res, 200, await route[2](client, params, Object.fromEntries(url.searchParams), body))
     } catch (err) {
       const status = err.status ?? 502
-      if (status >= 500 && token) huly.resetClient(token, workspace)
+      if (status >= 500 && token) huly.resetClient(token)
       send(res, status, { error: err.message })
     } finally {
       console.log(`${req.method} ${url.pathname} ${res.statusCode} ${Date.now() - started}ms`)

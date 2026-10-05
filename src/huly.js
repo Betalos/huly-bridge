@@ -16,7 +16,7 @@ const { markdownToMarkup, markupToMarkdown } = require('@hcengineering/text-mark
 const { jsonToMarkup, markupToJSON } = require('@hcengineering/text-core')
 
 const HULY_URL = process.env.HULY_URL
-const DEFAULT_WORKSPACE = process.env.HULY_WORKSPACE
+const HULY_WORKSPACE = process.env.HULY_WORKSPACE
 const READY_STATUS = process.env.READY_STATUS ?? 'Ready'
 const READY_LABEL = process.env.READY_LABEL ?? 'ready'
 const DEPENDS_ON_RE = /^\s*Depends-On:\s*(.+)$/im
@@ -31,16 +31,15 @@ class HttpError extends Error {
 // ---------- connections (one per caller token; the token is the caller's Huly identity) ----------
 
 const clients = new Map()
-const keyOf = (token, workspace) => createHash('sha256').update(`${workspace}\0${token}`).digest('hex')
+const keyOf = (token) => createHash('sha256').update(token).digest('hex')
 
-function getClient (token, workspace = DEFAULT_WORKSPACE) {
+function getClient (token) {
   if (!token) throw new HttpError(401, 'Authorization: Bearer <Huly token> is required')
-  if (!workspace) throw new HttpError(400, 'No workspace: send X-Huly-Workspace or set HULY_WORKSPACE')
-  const key = keyOf(token, workspace)
+  const key = keyOf(token)
   if (!clients.has(key)) {
     const pending = connect(HULY_URL, {
       token,
-      workspace,
+      workspace: HULY_WORKSPACE,
       socketFactory: NodeWebSocketFactory,
       connectionTimeout: 30000
     }).catch((err) => {
@@ -53,8 +52,8 @@ function getClient (token, workspace = DEFAULT_WORKSPACE) {
 }
 
 // Drop a connection after an unexpected error; the next call reconnects.
-function resetClient (token, workspace = DEFAULT_WORKSPACE) {
-  const key = keyOf(token, workspace)
+function resetClient (token) {
+  const key = keyOf(token)
   const pending = clients.get(key)
   clients.delete(key)
   pending?.then((c) => c.close()).catch(() => {})

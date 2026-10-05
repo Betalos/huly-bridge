@@ -12,7 +12,7 @@ docker run -p 8080:8080 -e HULY_URL=https://huly.example.com -e HULY_WORKSPACE=m
 | Env | |
 |---|---|
 | `HULY_URL` | required, your Huly front URL |
-| `HULY_WORKSPACE` | default workspace URL name (optional, see header below) |
+| `HULY_WORKSPACE` | workspace URL name passed to the Huly client (the token decides the workspace) |
 | `READY_STATUS` / `READY_LABEL` | what `/issues/ready` treats as ready (default `Ready` / `ready`) |
 | `PORT` | default `8080` |
 
@@ -22,11 +22,10 @@ The bridge stores no credentials. Each request carries the caller's Huly token:
 
 ```
 Authorization: Bearer <Huly workspace token>
-X-Huly-Workspace: <workspace>        # optional, overrides HULY_WORKSPACE
 ```
 
 Huly validates the token, so a different token = a different Huly user (comments show the right author).
-In n8n set these two headers in the HTTP Request node, or on a Header Auth credential per agent.
+In n8n send it as a Header Auth credential per agent (name `Authorization`, value `Bearer <token>`).
 The server speaks plain HTTP: keep it on a private network or put TLS in front, since tokens are in the headers.
 
 ## Routes
