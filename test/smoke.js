@@ -5,6 +5,7 @@ const tags = require('@hcengineering/tags').default
 const task = require('@hcengineering/task').default
 const chunter = require('@hcengineering/chunter').default
 const core = require('@hcengineering/core').default
+const contact = require('@hcengineering/contact').default
 const { IssuePriority } = require('@hcengineering/tracker')
 const { markdownToMarkup, markupToMarkdown } = require('@hcengineering/text-markdown')
 const { jsonToMarkup, markupToJSON } = require('@hcengineering/text-core')
@@ -23,7 +24,8 @@ for (const [name, value] of Object.entries({
   'task.statusCategory.Won': task.statusCategory.Won,
   'chunter.class.ChatMessage': chunter.class.ChatMessage,
   'core.space.Space': core.space.Space,
-  'core.space.Workspace': core.space.Workspace
+  'core.space.Workspace': core.space.Workspace,
+  'contact.class.Person': contact.class.Person
 })) {
   assert.ok(value, `${name} is undefined`)
 }

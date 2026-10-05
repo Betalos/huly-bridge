@@ -5,6 +5,7 @@
 const { connect, NodeWebSocketFactory } = require('@hcengineering/api-client')
 const { createHash } = require('node:crypto')
 const core = require('@hcengineering/core').default
+const contact = require('@hcengineering/contact').default
 const { generateId, SortingOrder } = require('@hcengineering/core')
 const { makeRank } = require('@hcengineering/rank')
 const tracker = require('@hcengineering/tracker').default
@@ -97,6 +98,21 @@ async function allStatuses (client) {
   return new Map(statuses.map((s) => [s._id, { name: s.name, category: categoryName(s.category) }]))
 }
 
+// Assignee: "me" (the caller), null / "none" (nobody), a person's name as Huly shows it ("Last,First"), or a person uuid.
+async function resolvePerson (client, who) {
+  if (who === null || who === 'none') return null
+  const persons = await client.findAll(contact.class.Person, {})
+  let person
+  if (who === 'me') {
+    const own = await client.getAccount()
+    person = persons.find((p) => p.personUuid === own.uuid)
+  } else {
+    person = persons.find((p) => p.personUuid === who) ?? persons.find((p) => p.name.toLowerCase() === String(who).toLowerCase())
+  }
+  if (!person) throw new HttpError(400, `Assignee "${who}" is not a person in this workspace`)
+  return person._id
+}
+
 async function ensureLabel (client, title) {
   const existing = await client.findOne(tags.class.TagElement, { title, targetClass: tracker.class.Issue })
   if (existing) return existing
@@ -135,6 +151,9 @@ async function summarize (client, issues, { withBody = false } = {}) {
     ? await client.findAll(tracker.class.Issue, { _id: { $in: blockerIds } })
     : []
   const blockerById = new Map(blockers.map((b) => [b._id, b]))
+  const assigneeIds = [...new Set(issues.map((i) => i.assignee).filter(Boolean))]
+  const people = assigneeIds.length ? await client.findAll(contact.class.Person, { _id: { $in: assigneeIds } }) : []
+  const personById = new Map(people.map((p) => [p._id, p.name]))
 
   const out = []
   for (const issue of issues) {
@@ -147,6 +166,7 @@ async function summarize (client, issues, { withBody = false } = {}) {
       statusCategory: status?.category ?? null,
       labels: labelRefs.filter((r) => r.attachedTo === issue._id).map((r) => r.title),
       parent: issue.parents?.[0]?.identifier ?? null,
+      assignee: personById.get(issue.assignee) ?? null,
       blockedBy: (issue.blockedBy ?? []).map((b) => {
         const blocker = blockerById.get(b._id)
         return { identifier: blocker?.identifier ?? null, status: statuses.get(blocker?.status)?.name ?? null }
@@ -222,6 +242,7 @@ async function createIssue (client, body) {
   const proj = await findProject(client, project)
   const parentIssue = parent ? await findIssue(client, parent) : undefined
   const blockers = await issuesByIdentifiers(client, blockedBy)
+  const assignee = body.assignee === undefined ? null : await resolvePerson(client, body.assignee)
 
   const _id = generateId()
   const inc = await client.updateDoc(tracker.class.Project, core.space.Space, proj._id, { $inc: { sequence: 1 } }, true)
@@ -250,7 +271,7 @@ async function createIssue (client, body) {
       kind: tracker.taskTypes.Issue,
       identifier: `${proj.identifier}-${number}`,
       priority: IssuePriority[body.priority] ?? IssuePriority.NoPriority,
-      assignee: null,
+      assignee,
       component: null,
       estimation: 0,
       remainingTime: 0,
@@ -294,7 +315,7 @@ async function updateLabels (client, identifier, { add = [], remove = [] }) {
   return await getIssue(client, identifier)
 }
 
-async function updateIssue (client, identifier, { status, blockedBy }) {
+async function updateIssue (client, identifier, { status, blockedBy, assignee }) {
   const issue = await findIssue(client, identifier)
   const update = {}
   if (status) {
@@ -307,6 +328,7 @@ async function updateIssue (client, identifier, { status, blockedBy }) {
     const blockers = await issuesByIdentifiers(client, blockedBy)
     update.blockedBy = blockers.map((b) => ({ _id: b._id, _class: b._class }))
   }
+  if (assignee !== undefined) update.assignee = await resolvePerson(client, assignee)
   if (Object.keys(update).length) await client.updateDoc(tracker.class.Issue, issue.space, issue._id, update)
   return await getIssue(client, identifier)
 }

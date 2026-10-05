@@ -32,6 +32,7 @@ The server speaks plain HTTP: keep it on a private network or put TLS in front, 
 
 `GET /health` (no auth), `GET /me`, `/capabilities`, `/projects`, `/activity/last`, `/issues`, `/issues/ready`,
 `GET|PATCH /issues/:ID`, `POST /issues`, `POST /issues/:ID/labels`, `POST /issues/:ID/comments`.
+`POST /issues` and `PATCH /issues/:ID` accept `assignee`: `"me"` (the caller), a person's name as Huly shows it (`"Last,First"`), a person uuid, or `null` to unassign. Issues in listings show `assignee` (the person's name).
 Issue comments include `byMe`: true when the calling token wrote it (use `/me` for the full list of the caller's social ids).
 
 ## Releases
