@@ -6,7 +6,7 @@ const { connect, NodeWebSocketFactory } = require('@hcengineering/api-client')
 const { createHash } = require('node:crypto')
 const core = require('@hcengineering/core').default
 const contact = require('@hcengineering/contact').default
-const { generateId, SortingOrder } = require('@hcengineering/core')
+const { generateId, makeCollabId, SortingOrder } = require('@hcengineering/core')
 const { makeRank } = require('@hcengineering/rank')
 const tracker = require('@hcengineering/tracker').default
 const { IssuePriority } = require('@hcengineering/tracker')
@@ -20,6 +20,10 @@ const HULY_URL = process.env.HULY_URL
 const HULY_WORKSPACE = process.env.HULY_WORKSPACE
 const READY_STATUS = process.env.READY_STATUS ?? 'Ready'
 const READY_LABEL = process.env.READY_LABEL ?? 'ready'
+const FORGEJO_WEB = process.env.FORGEJO_WEB ?? 'https://forgejo.synapia.cc'
+// Custom Issue attributes (Hyperlink type, created in Huly's settings), found by their label because the attribute name is workspace-specific.
+// Huly stores a hyperlink as "<title>,<url>"; reads also accept a bare url or a bare owner/name.
+const LINK_FIELDS = { repository: 'Git Repository', pullRequest: 'Pull Request' }
 const DEPENDS_ON_RE = /^\s*Depends-On:\s*(.+)$/im
 
 class HttpError extends Error {
@@ -126,6 +130,21 @@ async function ensureLabel (client, title) {
   return { _id, title, color: 11 }
 }
 
+const linkKeys = new Map()
+
+async function linkKey (client, field, { required = false } = {}) {
+  if (!linkKeys.has(field)) {
+    const attr = await client.findOne(core.class.Attribute, { attributeOf: tracker.class.Issue, label: `embedded:embedded:${LINK_FIELDS[field]}` })
+    if (attr) linkKeys.set(field, attr.name)
+  }
+  const key = linkKeys.get(field)
+  if (!key && required) throw new HttpError(400, `The Huly Issue has no custom field "${LINK_FIELDS[field]}" (Settings > Classes > Issue > add a Hyperlink attribute)`)
+  return key ?? null
+}
+
+const repoOf = (value) => /([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(String(value ?? '').trim())?.[1] ?? null
+const hyperlink = (title, url) => `${title},${url}`
+
 async function description (client, issue) {
   if (!issue.description) return ''
   return await client.fetchMarkup(issue._class, issue._id, 'description', issue.description, 'markdown')
@@ -155,6 +174,8 @@ async function summarize (client, issues, { withBody = false } = {}) {
   const people = assigneeIds.length ? await client.findAll(contact.class.Person, { _id: { $in: assigneeIds } }) : []
   const personById = new Map(people.map((p) => [p._id, p.name]))
 
+  const repoKey = await linkKey(client, 'repository')
+  const prKey = await linkKey(client, 'pullRequest')
   const out = []
   for (const issue of issues) {
     const status = statuses.get(issue.status)
@@ -171,6 +192,8 @@ async function summarize (client, issues, { withBody = false } = {}) {
         const blocker = blockerById.get(b._id)
         return { identifier: blocker?.identifier ?? null, status: statuses.get(blocker?.status)?.name ?? null }
       }),
+      repository: repoKey ? repoOf(issue[repoKey]) : null,
+      pullRequest: prKey ? String(issue[prKey] ?? '').split(',').pop() || null : null,
       modifiedOn: issue.modifiedOn
     }
     if (withBody) {
@@ -249,6 +272,8 @@ async function createIssue (client, body) {
   const number = inc.object.sequence
   const last = await client.findOne(tracker.class.Issue, { space: proj._id }, { sort: { rank: SortingOrder.Descending } })
   const desc = md ? await client.uploadMarkup(tracker.class.Issue, _id, 'description', md, 'markdown') : null
+  const repoKey = body.repository ? await linkKey(client, 'repository', { required: true }) : null
+  if (body.repository && !repoOf(body.repository)) throw new HttpError(400, '"repository" must be owner/name')
 
   const parents = parentIssue
     ? [
@@ -282,6 +307,7 @@ async function createIssue (client, body) {
       childInfo: [],
       dueDate: null,
       rank: makeRank(last?.rank, undefined),
+      ...(repoKey ? { [repoKey]: hyperlink(body.repository, `${FORGEJO_WEB}/${body.repository}`) } : {}),
       ...(blockers.length ? { blockedBy: blockers.map((b) => ({ _id: b._id, _class: b._class })) } : {})
     },
     _id
@@ -315,7 +341,17 @@ async function updateLabels (client, identifier, { add = [], remove = [] }) {
   return await getIssue(client, identifier)
 }
 
-async function updateIssue (client, identifier, { status, blockedBy, assignee }) {
+// uploadMarkup only creates a document; an existing description is rewritten through the collaborator (client.markup is not public API, versions are pinned).
+async function setDescription (client, issue, md, update) {
+  if (!issue.description) {
+    update.description = await client.uploadMarkup(tracker.class.Issue, issue._id, 'description', md, 'markdown')
+    return
+  }
+  const markup = jsonToMarkup(markdownToMarkup(md))
+  await client.markup.collaborator.updateMarkup(makeCollabId(tracker.class.Issue, issue._id, 'description'), markup)
+}
+
+async function updateIssue (client, identifier, { status, blockedBy, assignee, description: md, repository, pullRequest }) {
   const issue = await findIssue(client, identifier)
   const update = {}
   if (status) {
@@ -329,6 +365,14 @@ async function updateIssue (client, identifier, { status, blockedBy, assignee })
     update.blockedBy = blockers.map((b) => ({ _id: b._id, _class: b._class }))
   }
   if (assignee !== undefined) update.assignee = await resolvePerson(client, assignee)
+  if (md !== undefined) await setDescription(client, issue, md, update)
+  if (repository !== undefined) {
+    if (repository !== null && !repoOf(repository)) throw new HttpError(400, '"repository" must be owner/name or null')
+    update[await linkKey(client, 'repository', { required: true })] = repository && hyperlink(repository, `${FORGEJO_WEB}/${repository}`)
+  }
+  if (pullRequest !== undefined) { // { title, url } or null
+    update[await linkKey(client, 'pullRequest', { required: true })] = pullRequest && hyperlink(pullRequest.title, pullRequest.url)
+  }
   if (Object.keys(update).length) await client.updateDoc(tracker.class.Issue, issue.space, issue._id, update)
   return await getIssue(client, identifier)
 }
@@ -420,5 +464,6 @@ module.exports = {
   readyIssues,
   lastActivity,
   capabilities,
-  dependsOnFromText
+  dependsOnFromText,
+  repoOf
 }

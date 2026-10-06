@@ -41,3 +41,7 @@ assert.deepEqual(dependsOnFromText('Intro\nDepends-On: SYN-12, SYN-14\nmore'), [
 assert.deepEqual(dependsOnFromText('no deps here'), [])
 
 console.log('smoke ok')
+
+const { repoOf } = require('../src/huly')
+for (const v of ['synapia/sandbox-test', 'https://forgejo.synapia.cc/synapia/sandbox-test', 'x,https://forgejo.synapia.cc/synapia/sandbox-test.git/']) assert.equal(repoOf(v), 'synapia/sandbox-test')
+assert.equal(repoOf(''), null)
